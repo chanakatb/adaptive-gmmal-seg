@@ -24,7 +24,7 @@ from utils.utils import (
     save_ssl_predictions_as_imgs,
     save_fss_predictions_images,
     load_trained_model,
-    calculate_dice_score,
+    calculate_dice_per_image,
     print_current_lr,
     check_dataloader_sizes,
     review_batch,
@@ -39,7 +39,7 @@ IMAGE_WIDTH = 256
 PIN_MEMORY = True
 
 """ Load Pre-trained Model"""
-PATH_TO_TRAINED_MODEL = "results/fully_supervised_trained_model/2025-04-30_22-21-32/fully_supervised_learning.pt"
+PATH_TO_TRAINED_MODEL = "results/fully_supervised_trained_model/2026-10-30_19-36-00/fully_supervised_learning.pt"
 
 """ Load Dataset"""
 TRAIN_IMG_DIR = "../ISIC_2017_dataset/data/train_images/"
@@ -57,6 +57,7 @@ def test_fn(loader, model, loss_fn, device):
     model.eval()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     loop = tqdm(loader)
     for batch_idx, (data, targets) in enumerate(loop):
         data = data.to(device) # [-1,1]
@@ -73,7 +74,8 @@ def test_fn(loader, model, loss_fn, device):
         # Calculate metrics
         total_loss += loss.item()
         preds = predictions.float()
-        total_dice += calculate_dice_score(preds, targets) # {0,1}, {0,1}
+        total_dice += calculate_dice_per_image(preds, targets).sum() # {0,1}, {0,1}
+        num_images += targets.size(0)
         
         # update tqdm loop
         loop.set_postfix(loss=loss.item())        
@@ -83,7 +85,7 @@ def test_fn(loader, model, loss_fn, device):
         torch.cuda.empty_cache()
 
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice
 
 

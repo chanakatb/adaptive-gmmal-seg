@@ -1,6 +1,6 @@
 def run_gmm_clustering(
-    features_path="results/ssl_features_space/2025-04-19_17-25-19/features_space.pt",
-    filenames_path="results/ssl_features_space/2025-04-19_17-25-19/file_names.txt",
+    features_path="results/ssl_features_space/features_space.pt",
+    filenames_path="results/ssl_features_space/file_names.txt",
     n_components=10,
     pca_components=20,
     output_base="results/gmm_results"

@@ -13,7 +13,7 @@ LEARNING_RATE = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 16
 START_EPOCH = 1
-NUM_EPOCHS = 20
+NUM_EPOCHS = 50
 NUM_WORKERS = 4
 IMAGE_HEIGHT = 256
 IMAGE_WIDTH = 256
@@ -22,14 +22,14 @@ PIN_MEMORY = True
 # =============================================================================
 # Early Stopping Conditions
 # =============================================================================
-EARLY_STOPPING_EPOCHES = 20
+EARLY_STOPPING_EPOCHES = 10
 EXPECTED_BEST_LOSS = 0.05
 
 # =============================================================================
 # Load Self-Supervised Trained Model
 # =============================================================================
-LOAD_TRAINED_SSL_MODEL = False
-PATH_TO_TRAINED_MODEL = 'results/ssl_trained_model/2025-04-19_01-19-21/self_supervised_learning.pt'
+LOAD_TRAINED_SSL_MODEL = True
+PATH_TO_TRAINED_MODEL = 'results/ssl_trained_model/2026-10-30_22-46-20/self_supervised_learning.pt'
 
 # =============================================================================
 # Active Sample Selection Method
@@ -38,7 +38,7 @@ PATH_TO_TRAINED_MODEL = 'results/ssl_trained_model/2025-04-19_01-19-21/self_supe
 #   - Cluster-Based Probability (CBS) Selection - 'CBS'
 #   - Entropy-Based Ranking (EBR) within Cluster - 'EBR'
 # Fix typo in variable name
-ACTIVE_SAMPLE_SELECTION_METHOD = 'EBR'
+ACTIVE_SAMPLE_SELECTION_METHOD = 'CBS'
 
 # =============================================================================
 # Active Sample Selection Order
@@ -62,7 +62,7 @@ NUM_CLASSES = 2  # Default: 2 for binary segmentation (background + lesion)
 # =============================================================================
 # GMM Cluster Saving Information
 # =============================================================================
-BASE_RANKED_CLUSTERS_FILE = "results/cluster_info/ranked_cluster_assignments.csv"  # The GMM results of the full training dataset. This is for only for the first iteration
+BASE_RANKED_CLUSTERS_FILE = "results/cluster_info/2026-10-30_23-41-06/ranked_cluster_assignments.csv"  # The GMM results of the full training dataset. This is for only for the first iteration
 UPDATED_RANKED_CLUSTERS_FILE = "results/cluster_info/ranked_cluster_assignments_updated.csv"  # The images in the training dataset that have not been used yet
 PREV_SELECTED_FILE = "results/cluster_info/ranked_cluster_assignments_prev_selected.csv"  # The images in the training dataset that have been already used
 ENTROPY_FILE = "results/cluster_info/entropy_results.csv"  # The entropy calculation of the full training dataset
@@ -79,7 +79,8 @@ FEATURE_SPACE_DIRECTORY = "results/ssaal_trained_model"
 # Active Learning Configuration
 # =============================================================================
 # Define sample sizes for each iteration
-SAMPLE_SIZES = [300, 335, 370, 405, 440, 475, 510, 545, 580]
+SAMPLE_SIZES = [100, 200, 300, 335, 370, 405, 440, 475, 510, 545, 580, 615]
+
 
 # Loss function parameters
 LOSS_ALPHA = 0.3  # Weight for BCE loss

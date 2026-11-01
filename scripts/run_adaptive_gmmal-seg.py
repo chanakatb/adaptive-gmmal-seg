@@ -37,7 +37,7 @@ try:
         data_loader_for_self_supervised_assisted_active_learning,
         Config,
         load_trained_model,
-        calculate_dice_score,
+        calculate_dice_per_image,
         save_ssaal_predictions_images,
         save_ssaal_test_images,
     )
@@ -56,9 +56,10 @@ except ImportError as e:
 def setup_directories():
     """Create and return model directories for saving checkpoints"""
     timenow = datetime.strftime(datetime.now(pytz.timezone('America/New_York')), '%Y-%m-%d_%H-%M-%S')
-    model_path = os.path.join(MODEL_DIRECTORY, timenow)
-    val_image_path = os.path.join(IMAGE_VAL_DIRECTORY, timenow)
-    test_image_path = os.path.join(IMAGE_TEST_DIRECTORY, timenow)
+    run_name = f"{timenow}_{ACTIVE_SAMPLE_SELECTION_METHOD}"  # e.g. 2026-10-31_15-40-07_EBR
+    model_path = os.path.join(MODEL_DIRECTORY, run_name)
+    val_image_path = os.path.join(IMAGE_VAL_DIRECTORY, run_name)
+    test_image_path = os.path.join(IMAGE_TEST_DIRECTORY, run_name)
     
     os.makedirs(model_path, exist_ok=True)
     os.makedirs(val_image_path, exist_ok=True)
@@ -139,6 +140,7 @@ def train_fn(loader, model, optimizer, loss_fn, device):
     model.train()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     bottlenecks = []
     loop = tqdm(loader)
     
@@ -161,7 +163,8 @@ def train_fn(loader, model, optimizer, loss_fn, device):
 
         # Calculate metrics
         total_loss += loss.item()
-        total_dice += calculate_dice_score(predictions, targets)
+        total_dice += calculate_dice_per_image(predictions, targets).sum()
+        num_images += targets.size(0)
 
         # Store bottlenecks
         bottlenecks.append(bottleneck.detach().cpu())
@@ -174,7 +177,7 @@ def train_fn(loader, model, optimizer, loss_fn, device):
         torch.cuda.empty_cache()
 
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice, bottlenecks
 
 
@@ -183,6 +186,7 @@ def validate_fn(loader, model, loss_fn, device):
     model.eval()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     loop = tqdm(loader)
     
     with torch.no_grad():
@@ -199,7 +203,8 @@ def validate_fn(loader, model, loss_fn, device):
             
             # Calculate metrics
             total_loss += loss.item()
-            total_dice += calculate_dice_score(predictions, targets)
+            total_dice += calculate_dice_per_image(predictions, targets).sum()
+            num_images += targets.size(0)
             
             # Update progress bar
             loop.set_postfix(loss=loss.item())
@@ -209,7 +214,7 @@ def validate_fn(loader, model, loss_fn, device):
             torch.cuda.empty_cache()
     
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice
 
 
@@ -218,6 +223,7 @@ def test_fn(loader, model, loss_fn, device):
     model.eval()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     loop = tqdm(loader)
     
     with torch.no_grad():
@@ -234,7 +240,8 @@ def test_fn(loader, model, loss_fn, device):
            
             # Calculate metrics
             total_loss += loss.item()
-            total_dice += calculate_dice_score(predictions, targets)
+            total_dice += calculate_dice_per_image(predictions, targets).sum()
+            num_images += targets.size(0)
             
             # Update progress bar
             loop.set_postfix(loss=loss.item())
@@ -244,7 +251,7 @@ def test_fn(loader, model, loss_fn, device):
             torch.cuda.empty_cache()
 
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice
 
 
@@ -300,10 +307,16 @@ def load_and_review_data(train_transform, val_transforms, test_transforms, confi
     return train_loader, val_loader, test_loader
 
 
-def train_model(model, train_loader, val_loader, optimizer, scheduler, loss_fn, 
-               iteration_model_path, iteration_image_path, start_epoch=1, 
-               iteration_num=None, sample_size=None, best_loss=float('inf')):
-    """Execute the main training loop"""
+def train_model(model, train_loader, val_loader, optimizer, scheduler, loss_fn,
+               iteration_model_path, iteration_image_path, start_epoch=1,
+               iteration_num=None, sample_size=None):
+    """Execute the main training loop.
+
+    The checkpoint is selected by validation Dice (the reported metric), and the best
+    values start fresh for every iteration so each sample size is tested with its own model.
+    """
+    best_dice = float('-inf')
+    best_loss = float('inf')  # Only used for the EXPECTED_BEST_LOSS early-stopping condition
     num_epoch_no_improvement = 0
     
     # Clear memory before training
@@ -355,9 +368,11 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, loss_fn,
         if new_lr != old_lr:
             print(f"Learning rate changed from {old_lr} to {new_lr}")
         
-        # Save model if improved
-        if valid_loss < best_loss:
-            print(f"Validation loss decreases from {best_loss:.4f} to {valid_loss:.4f}")
+        best_loss = min(best_loss, valid_loss)
+
+        # Save model if validation Dice improved
+        if float(valid_dice) > best_dice:
+            print(f"Validation Dice increases from {best_dice:.4f} to {float(valid_dice):.4f}")
             
             # Move model to CPU for saving
             model = model.cpu()
@@ -379,12 +394,12 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, loss_fn,
             # Save sample predictions
             save_ssaal_predictions_images(val_loader, model, folder=iteration_image_path, device=DEVICE)
 
-            best_loss = valid_loss
+            best_dice = float(valid_dice)
             num_epoch_no_improvement = 0
         else:
             num_epoch_no_improvement += 1
-            print(f"Validation loss does not decrease from {best_loss:.4f}, " 
-                  f"num_epoch_no_improvement {num_epoch_no_improvement} since the last best loss update")
+            print(f"Validation Dice does not increase from {best_dice:.4f}, "
+                  f"num_epoch_no_improvement {num_epoch_no_improvement} since the last best Dice update")
         
         # Check early stopping conditions
         if check_early_stopping(num_epoch_no_improvement, best_loss):
@@ -394,7 +409,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, loss_fn,
         sys.stdout.flush()
         torch.cuda.empty_cache()
 
-    return best_loss
+    return best_dice
 
 
 def check_early_stopping(num_epoch_no_improvement, best_loss):
@@ -439,15 +454,15 @@ def main():
     # Model loading if needed
     if LOAD_TRAINED_SSL_MODEL and PREV_MODEL_PATH is not None:
         model, optimizer, scheduler, start_epoch = load_trained_model(model, optimizer, scheduler, PREV_MODEL_PATH)
+        # The SSL checkpoint's scheduler tracked the reconstruction loss, so its 'best' value
+        # is not comparable to the segmentation loss. Start segmentation with a fresh scheduler.
+        scheduler = setup_scheduler(optimizer)
     else:
         print("\nNo pre-trained model loaded. Starting from scratch.\n")
         start_epoch = START_EPOCH
 
     # Dictionary to store test results across iterations
     test_results = {}
-    
-    # Best validation loss
-    best_loss = float('inf')
 
     # Iterative training
     for i, sample_size in enumerate(SAMPLE_SIZES):
@@ -577,12 +592,13 @@ def main():
 
         # Training loop
         print("--- TRAIN MODEL ---")
-        best_loss = train_model(
-            model, train_loader, val_loader, optimizer, 
-            scheduler, loss_fn, model_path, val_image_path, 
-            start_epoch=1, iteration_num=iteration_num, 
-            sample_size=sample_size, best_loss=best_loss
+        best_dice = train_model(
+            model, train_loader, val_loader, optimizer,
+            scheduler, loss_fn, model_path, val_image_path,
+            start_epoch=1, iteration_num=iteration_num,
+            sample_size=sample_size
         )
+        print(f"Best validation Dice for iteration {iteration_num}: {best_dice:.4f}")
 
         # Update model path for next iteration
         PREV_MODEL_PATH = os.path.join(model_path, "adaptive_gmmal_seg.pt")

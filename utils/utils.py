@@ -158,16 +158,10 @@ def get_loaders_with_augmentation(
             
             # Create img_list attribute with full paths in the same sorted order
             self.img_list = [os.path.join(image_dir, img) for img in self.images]
-            
-            resize_only = [t for t in train_transform if isinstance(t, A.Resize)][0]
-            self.resize_only_transform = A.Compose([
-                resize_only,  # This maintains the original IMAGE_HEIGHT and IMAGE_WIDTH
-                ToTensorV2(),
-            ])   
-                
+
             if len(self.images) == 0:
                 raise ValueError(f"No images found in {image_dir}")
-                    
+
             # print(f"Found {len(self.images)} training images in {image_dir}")
 
         def __len__(self):
@@ -176,25 +170,22 @@ def get_loaders_with_augmentation(
         def __getitem__(self, idx):
             # Load and transform image
             img_path = os.path.join(self.image_dir, self.images[idx])
-            image = Image.open(img_path).convert("RGB")               
-                            
-            # Apply album transforms
+            image = Image.open(img_path).convert("RGB")
+
+            # Apply album transforms (geometric: shared by input and target)
             if self.transform:
                 transformed = self.transform(image=np.array(image))
                 image_tensor = transformed["image"] / 255.0 # This is already a tensor from ToTensorV2()
-
-                transformed_prediction = self.resize_only_transform(image=np.array(image))
-                image_tensor_prediction = transformed_prediction["image"] / 255.0 # This is already a tensor from ToTensorV2()
             else:
                 image_tensor = transforms.ToTensor()(image)
-                image_tensor_prediction = transforms.ToTensor()(image)
 
-            
-            
-            # Create grayscale version of the original image
-            grayscale_tensor = self.rgb_to_grayscale(image_tensor_prediction)
-            
-            # Apply augmentation
+            # Random flips are geometric too, so apply them before splitting into input and target
+            image_tensor = self.random_flip(image_tensor)
+
+            # Create grayscale target from the same geometrically transformed image
+            grayscale_tensor = self.rgb_to_grayscale(image_tensor)
+
+            # Apply corruptions to the input only
             augmented_tensor = self.augment_image(image_tensor.clone())
             
             # Normalize to [-1, 1] range
@@ -208,16 +199,20 @@ def get_loaders_with_augmentation(
             weights = torch.tensor([0.2989, 0.5870, 0.1140], dtype=torch.float32)
             grayscale = torch.sum(rgb_tensor * weights.view(3, 1, 1), dim=0, keepdim=True)
             return grayscale
-        
-        def augment_image(self, image_tensor):
-            x = image_tensor.permute(1, 2, 0).clone()
+
+        def random_flip(self, image_tensor):
+            """Randomly flip a [C, H, W] tensor along H and/or W"""
             if random.random() < self.config.flip_rate:
                 flip_count = 0
                 max_flips = 3
                 while random.random() < 0.5 and flip_count < max_flips:
-                    degree = random.choice([0, 1])
-                    x = torch.flip(x, [degree])
+                    degree = random.choice([1, 2])
+                    image_tensor = torch.flip(image_tensor, [degree])
                     flip_count += 1
+            return image_tensor
+
+        def augment_image(self, image_tensor):
+            x = image_tensor.permute(1, 2, 0).clone()
             x = local_pixel_shuffling(x, prob=self.config.local_rate)
             x = nonlinear_transformation(x, self.config.nonlinear_rate)
             if random.random() < self.config.paint_rate:
@@ -288,18 +283,23 @@ def get_loaders_with_augmentation(
 
     # Initialize datasets
     train_ds = AutoencoderTrainDataset(train_dir, transform=train_transform, config=config)
-    val_ds = AutoencoderValDataset(val_dir, transform=val_transform)
 
     # Create data loaders
     train_loader = DataLoader(
-        train_ds, 
-        batch_size=batch_size, 
+        train_ds,
+        batch_size=batch_size,
         shuffle=shuffle_train,
-        num_workers=num_workers, 
+        num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,  # Drop the last incomplete batch to avoid shape issues
     )
-    
+
+    # Validation set is optional (e.g. feature extraction only needs the training images)
+    if not val_dir:
+        return train_loader, None
+
+    val_ds = AutoencoderValDataset(val_dir, transform=val_transform)
+
     val_loader = DataLoader(
         val_ds, 
         batch_size=batch_size, 
@@ -528,48 +528,24 @@ def data_loader_for_fully_supervised_learning(
             image = Image.open(img_path).convert("RGB")
             mask = Image.open(mask_path).convert("L")  # Load as grayscale
                             
-            # Apply full transforms to image
+            # Apply the same geometric transforms (resize, rotate, flips) to image and mask
+            image_np = np.array(image)
+            mask_np = np.array(mask)
             if self.transform:
-                # Convert to numpy arrays for albumentations
-                image_np = np.array(image)
-                transformed = self.transform(image=image_np)
+                transformed = self.transform(image=image_np, mask=mask_np)
                 image_tensor = transformed["image"] / 255.0  # Already tensor from ToTensorV2
+                mask_tensor = transformed["mask"].unsqueeze(0) / 255.0  # [H, W] -> [1, H, W]
             else:
                 image_tensor = transforms.ToTensor()(image)
-            
-            # Apply only resize to mask
-            mask_np = np.array(mask)
-            transformed_mask = self.resize_only_transform(image=mask_np)
-            mask_tensor = transformed_mask["image"] / 255.0
-            
-            # Apply augmentation to image only
-            augmented_tensor = self.augment_image(image_tensor.clone())
+                mask_tensor = transforms.ToTensor()(mask)
             
             # Ensure mask is binary (0 or 1)
             mask_tensor = (mask_tensor > 0.5).float()
             
             # Normalize image to [-1, 1] range
-            augmented_tensor = normalize_minus1_to_1(augmented_tensor)
+            image_tensor = normalize_minus1_to_1(image_tensor)
             
-            return augmented_tensor, mask_tensor
-        
-        def augment_image(self, image_tensor):
-            x = image_tensor.permute(1, 2, 0).clone()
-            if random.random() < self.config.flip_rate:
-                flip_count = 0
-                max_flips = 3
-                while random.random() < 0.5 and flip_count < max_flips:
-                    degree = random.choice([0, 1])
-                    x = torch.flip(x, [degree])
-                    flip_count += 1
-            x = local_pixel_shuffling(x, prob=self.config.local_rate)
-            x = nonlinear_transformation(x, self.config.nonlinear_rate)
-            if random.random() < self.config.paint_rate:
-                if random.random() < self.config.inpaint_rate:
-                    x = image_in_painting(x)
-                else:
-                    x = image_out_painting(x)
-            return x.permute(2, 0, 1)
+            return image_tensor, mask_tensor
 
     class SupervisedValDataset(Dataset):
         def __init__(self, image_dir, mask_dir, transform=None):
@@ -998,49 +974,24 @@ def data_loader_for_self_supervised_assisted_active_learning(
             image = Image.open(img_path).convert("RGB")
             mask = Image.open(mask_path).convert("L")  # Load as grayscale            
                                     
-            # Apply full transforms to image
+            # Apply the same geometric transforms (resize, rotate, flips) to image and mask
+            image_np = np.array(image)
+            mask_np = np.array(mask)
             if self.transform:
-                # Convert to numpy arrays for albumentations
-                image_np = np.array(image)
-                transformed = self.transform(image=image_np)
+                transformed = self.transform(image=image_np, mask=mask_np)
                 image_tensor = transformed["image"] / 255.0  # Already tensor from ToTensorV2
+                mask_tensor = transformed["mask"].unsqueeze(0) / 255.0  # [H, W] -> [1, H, W]
             else:
                 image_tensor = transforms.ToTensor()(image)
-            
-            # Apply only resize to mask
-            mask_np = np.array(mask)
-            transformed_mask = self.resize_only_transform(image=mask_np)
-            mask_tensor = transformed_mask["image"] / 255.0
-            
-            # Apply augmentation to image only
-            augmented_tensor = self.augment_image(image_tensor.clone())
+                mask_tensor = transforms.ToTensor()(mask)
             
             # Ensure mask is binary (0 or 1)
             mask_tensor = (mask_tensor > 0.5).float()
             
             # Normalize image to [-1, 1] range
-            augmented_tensor = normalize_minus1_to_1(augmented_tensor)
+            image_tensor = normalize_minus1_to_1(image_tensor)
             
-            # Return cluster info along with the image and mask
-            return augmented_tensor, mask_tensor
-        
-        def augment_image(self, image_tensor):
-            x = image_tensor.permute(1, 2, 0).clone()
-            if random.random() < self.config.flip_rate:
-                flip_count = 0
-                max_flips = 3
-                while random.random() < 0.5 and flip_count < max_flips:
-                    degree = random.choice([0, 1])
-                    x = torch.flip(x, [degree])
-                    flip_count += 1
-            x = local_pixel_shuffling(x, prob=self.config.local_rate)
-            x = nonlinear_transformation(x, self.config.nonlinear_rate)
-            if random.random() < self.config.paint_rate:
-                if random.random() < self.config.inpaint_rate:
-                    x = image_in_painting(x)
-                else:
-                    x = image_out_painting(x)
-            return x.permute(2, 0, 1)
+            return image_tensor, mask_tensor
        
     # Load the ranked clusters file and process for active learning
     updated_ranked_clusters_file = ranked_clusters_file
@@ -1889,6 +1840,23 @@ def calculate_dice_score(pred, target):
     smooth = 1e-5
     intersection = (pred * target).sum()
     return (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+
+def calculate_dice_per_image(pred, target):
+    """
+    Calculate the Dice score of each image in a batch.
+
+    Args:
+        pred: Binary prediction tensor [B, C, H, W]
+        target: Binary target tensor [B, C, H, W]
+
+    Returns:
+        torch.Tensor: Dice score per image [B]
+    """
+    smooth = 1e-5
+    pred = pred.flatten(1)
+    target = target.flatten(1)
+    intersection = (pred * target).sum(dim=1)
+    return (2. * intersection + smooth) / (pred.sum(dim=1) + target.sum(dim=1) + smooth)
 
 def load_trained_model(model, optimizer, scheduler, model_path):
     """

@@ -173,11 +173,11 @@ def _extract_features_fn(loader, model, device):
 
 if __name__ == "__main__":
     """ Load Pre-trained Model"""
-    PATH_TO_TRAINED_MODEL = 'results/ssl_trained_model/2025-04-19_01-19-21/self_supervised_learning.pt'
+    PATH_TO_TRAINED_MODEL = 'results/ssl_trained_model/2026-10-30_22-46-20/self_supervised_learning.pt'
 
     """ Load Dataset"""
     TRAIN_IMG_DIR = "../ISIC_2017_dataset/data/train_images/"
-    VAL_IMG_DIR = "../ISIC_2017_dataset/data/val_images/" # not used in feature extraction
+    VAL_IMG_DIR = "../ISIC_2017_dataset/data/val_images/" # not used in feature extraction, but the loader requires a valid directory
 
     """ Saving Directory"""
     FEATURE_SPACE_DIRECTORY = "results/ssl_features_space"

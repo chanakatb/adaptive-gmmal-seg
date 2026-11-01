@@ -41,7 +41,7 @@ PIN_MEMORY = True
 
 """ Early Stopping Conditions """
 EARLY_STOPPING_EPOCHES = 30
-EXPECTED_BEST_LOSS = 0.005
+EXPECTED_BEST_LOSS = 0.001
 
 """ Load Pre-trained Model"""
 LOAD_TRAINED_MODEL = False
@@ -49,9 +49,9 @@ PATH_TO_TRAINED_MODEL = ''
 
 """ Load Dataset"""
 TRAIN_IMG_DIR = "../ISIC_2017_dataset/data/train_images/"
-TRAIN_MASK_DIR = "../ISIC_2017_dataset/data/train_masks/" # not used in self-supervised learning
+TRAIN_MASK_DIR = "" #"../ISIC_2017_dataset/data/train_masks/" # not used in self-supervised learning
 VAL_IMG_DIR = "../ISIC_2017_dataset/data/val_images/"
-VAL_MASK_DIR = "../ISIC_2017_dataset/data/val_masks/" # not used in self-supervised learning
+VAL_MASK_DIR = "" #"../ISIC_2017_dataset/data/val_masks/" # not used in self-supervised learning
 
 """ Saving Directory"""
 MODEL_DIRECTORY = "results/ssl_trained_model"

@@ -24,7 +24,7 @@ plotly>=5.15.0
 tqdm>=4.65.0
 
 # Metrics and Evaluation
-scikit-metrics>=0.1.4
+# scikit-metrics>=0.1.4
 
 # Configuration and Logging
 pyyaml>=6.0

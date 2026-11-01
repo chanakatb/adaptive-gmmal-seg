@@ -26,7 +26,7 @@ from utils.utils import (
     #save_predictions_as_imgs,
     save_fss_predictions_images,
     load_trained_model,
-    calculate_dice_score,
+    calculate_dice_per_image,
     print_current_lr,
     check_dataloader_sizes,
     review_batch,
@@ -71,6 +71,7 @@ def train_fn(loader, model, optimizer, loss_fn, device):
     model.train()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     bottlenecks = []  # Collect bottlenecks across batches
     loop = tqdm(loader)
     for batch_idx, (data, targets) in enumerate(loop):
@@ -93,7 +94,8 @@ def train_fn(loader, model, optimizer, loss_fn, device):
         # Calculate metrics
         total_loss += loss.item()
         preds = predictions.float()
-        total_dice += calculate_dice_score(preds, targets) # {0,1}, {0,1}
+        total_dice += calculate_dice_per_image(preds, targets).sum() # {0,1}, {0,1}
+        num_images += targets.size(0)
 
         
         # update tqdm loop
@@ -104,7 +106,7 @@ def train_fn(loader, model, optimizer, loss_fn, device):
         torch.cuda.empty_cache()
 
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice, bottlenecks
 
 """ Validation """
@@ -112,6 +114,7 @@ def validate_fn(loader, model, loss_fn, device):
     model.eval()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     loop = tqdm(loader)  # Add progress bar for validation
     with torch.no_grad():
         for idx, (data, targets) in enumerate(loop):
@@ -128,7 +131,8 @@ def validate_fn(loader, model, loss_fn, device):
             # Calculate metrics
             total_loss += loss.item()
             preds = predictions.float()
-            total_dice += calculate_dice_score(preds, targets) # {0,1}, {0,1}
+            total_dice += calculate_dice_per_image(preds, targets).sum() # {0,1}, {0,1}
+            num_images += targets.size(0)
             
             # Update progress bar
             loop.set_postfix(loss=loss.item())
@@ -138,7 +142,7 @@ def validate_fn(loader, model, loss_fn, device):
             torch.cuda.empty_cache()
     
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice
 
 
@@ -147,6 +151,7 @@ def test_fn(loader, model, loss_fn, device):
     model.eval()
     total_loss = 0
     total_dice = 0
+    num_images = 0
     loop = tqdm(loader)
     for batch_idx, (data, targets) in enumerate(loop):
         data = data.to(device) # [-1,1]
@@ -163,7 +168,8 @@ def test_fn(loader, model, loss_fn, device):
         # Calculate metrics
         total_loss += loss.item()
         preds = predictions.float()
-        total_dice += calculate_dice_score(preds, targets) # {0,1}, {0,1}
+        total_dice += calculate_dice_per_image(preds, targets).sum() # {0,1}, {0,1}
+        num_images += targets.size(0)
         
         # update tqdm loop
         loop.set_postfix(loss=loss.item())        
@@ -173,7 +179,7 @@ def test_fn(loader, model, loss_fn, device):
         torch.cuda.empty_cache()
 
     avg_loss = total_loss / len(loader)
-    avg_dice = total_dice / len(loader)
+    avg_dice = total_dice / num_images  # Mean Dice per image
     return avg_loss, avg_dice
 
 """ Main Function """
@@ -211,9 +217,10 @@ def main():
 def setup_directories():
     """Create and return model directories for saving checkpoints"""
     timenow = datetime.strftime(datetime.now(pytz.timezone('America/New_York')), '%Y-%m-%d_%H-%M-%S')
-    model_path = os.path.join(MODEL_DIRECTORY, timenow)
-    val_image_path = os.path.join(IMAGE_VAL_DIRECTORY, timenow)
-    test_image_path = os.path.join(IMAGE_TEST_DIRECTORY, timenow)
+    run_name = f"{timenow}_fully_supervised"  # e.g. 2026-10-31_15-40-07_fully_supervised
+    model_path = os.path.join(MODEL_DIRECTORY, run_name)
+    val_image_path = os.path.join(IMAGE_VAL_DIRECTORY, run_name)
+    test_image_path = os.path.join(IMAGE_TEST_DIRECTORY, run_name)
     os.makedirs(model_path, exist_ok=True)
     os.makedirs(val_image_path, exist_ok=True)
     os.makedirs(test_image_path, exist_ok=True)
@@ -327,7 +334,8 @@ def load_pretrained_model(model, optimizer, scheduler):
 """ Func for Train Model """
 def train_model(model, train_loader, val_loader, test_loader, optimizer, scheduler, loss_fn, model_path, val_image_path, test_image_path, start_epoch):
     """Execute the main training loop"""
-    best_loss = float('inf')
+    best_dice = float('-inf')  # Checkpoint selection metric
+    best_loss = float('inf')   # Only used for the EXPECTED_BEST_LOSS early stopping condition
     num_epoch_no_improvement = 0
     
     # Clear memory before training
@@ -379,19 +387,21 @@ def train_model(model, train_loader, val_loader, test_loader, optimizer, schedul
         scheduler.step(valid_loss)
         print_current_lr(scheduler)
         
-        # Save model if improved
-        if valid_loss < best_loss:
-            handle_improved_model(model, optimizer, scheduler, epoch, valid_loss, best_loss, model_path)
+        best_loss = min(best_loss, valid_loss)
+
+        # Save model if validation Dice improved
+        if float(valid_dice) > best_dice:
+            handle_improved_model(model, optimizer, scheduler, epoch, float(valid_dice), best_dice, model_path)
 
             # Save sample predictions
             save_fss_predictions_images(val_loader, model, folder=val_image_path, device=DEVICE)
 
-            best_loss = valid_loss
+            best_dice = float(valid_dice)
             num_epoch_no_improvement = 0
         else:
             num_epoch_no_improvement += 1
-            print(f"Validation loss does not decrease from {best_loss:.4f}, " 
-                  f"num_epoch_no_improvement {num_epoch_no_improvement}")          
+            print(f"Validation Dice does not increase from {best_dice:.4f}, "
+                  f"num_epoch_no_improvement {num_epoch_no_improvement}")
             
         # Check early stopping conditions
         if check_early_stopping(num_epoch_no_improvement, best_loss):
@@ -433,9 +443,9 @@ def train_model(model, train_loader, val_loader, test_loader, optimizer, schedul
         torch.cuda.empty_cache()
 
 """ Func for Improved Model """
-def handle_improved_model(model, optimizer, scheduler, epoch, valid_loss, best_loss, model_path):
-    """Save model when validation loss improves"""
-    print(f"Validation loss decreases from {best_loss:.4f} to {valid_loss:.4f}")
+def handle_improved_model(model, optimizer, scheduler, epoch, valid_dice, best_dice, model_path):
+    """Save model when validation Dice improves"""
+    print(f"Validation Dice increases from {best_dice:.4f} to {valid_dice:.4f}")
     
     # Move model to CPU for saving
     model = model.cpu()

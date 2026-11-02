@@ -6,3 +6,4 @@ __pycache__/
 gmm_evolution/
 results/
 pca_explained_variance.png
+*.zip

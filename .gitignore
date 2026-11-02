@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-.vscode/
-*.pth
-*.pt
-gmm_evolution/
-results/
-pca_explained_variance.png
-*.zip

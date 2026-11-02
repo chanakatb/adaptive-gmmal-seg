@@ -119,22 +119,6 @@ def setup_scheduler(optimizer):
     return scheduler
 
 
-def reset_scheduler_keep_best(optimizer, best_value_scheduler):
-    """Reset scheduler while keeping the best value"""
-    new_scheduler = ReduceLROnPlateau(
-        optimizer, 
-        mode='min', 
-        factor=SCHEDULER_FACTOR,
-        patience=SCHEDULER_PATIENCE,
-        verbose=SCHEDULER_VERBOSE
-    )
-    
-    new_scheduler.best = best_value_scheduler
-    print(f"Scheduler reset with preserved best value: {new_scheduler.best}")
-    
-    return new_scheduler
-
-
 def train_fn(loader, model, optimizer, loss_fn, device):
     """Training function for one epoch"""
     model.train()
@@ -584,11 +568,9 @@ def main():
         for param_group in optimizer.param_groups:
             param_group['lr'] = LEARNING_RATE
         
-        # Save the current best value
-        best_value_scheduler = scheduler.best if hasattr(scheduler, 'best') else float('inf')
-
-        # Reset scheduler while keeping the best value
-        scheduler = reset_scheduler_keep_best(optimizer, best_value_scheduler)
+        # Fresh scheduler for every iteration so the previous iteration's best
+        # validation loss does not trigger early LR reductions
+        scheduler = setup_scheduler(optimizer)
 
         # Training loop
         print("--- TRAIN MODEL ---")

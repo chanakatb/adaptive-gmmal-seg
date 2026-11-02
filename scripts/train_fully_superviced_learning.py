@@ -325,6 +325,11 @@ def load_pretrained_model(model, optimizer, scheduler):
         model, optimizer, scheduler, start_epoch = load_trained_model(
             model, optimizer, scheduler, PATH_TO_TRAINED_MODEL
         )
+        # The loaded scheduler tracked the pre-training loss, which is not comparable
+        # to the segmentation loss. Restore the initial LR and start a fresh scheduler.
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = LEARNING_RATE
+        scheduler = setup_scheduler(optimizer)
         return model, optimizer, scheduler, start_epoch
     else:
         print("\nNo pre-trained model loaded. Starting from scratch.\n")
@@ -370,7 +375,7 @@ def train_model(model, train_loader, val_loader, test_loader, optimizer, schedul
         # Store results
         train_results[train_result_key] = {
             'epoch': epoch,
-            'sample_size': 1600,
+            'sample_size': 2000,
             'current_learning_rate': optimizer.param_groups[0]['lr'],
             'train_loss': f"{train_loss:.5f}",
             'train_dice': f"{train_dice.item():.5f}",
